@@ -1,4 +1,8 @@
-/* Code written by Chia Jiun Wei @ 21 Mar 2017
+/* Forked from https://github.com/DelfiSpace/DS1388
+ * and made Arduino/ESP32 compatible by Jensa. Also added
+ * a way to get the hundredths/centiseconds.
+ 
+ * Original Code written by Chia Jiun Wei @ 21 Mar 2017
  * <J.W.Chia@tudelft.nl>
  
  * DS1388: a library to provide high level APIs to interface with the 
@@ -15,8 +19,8 @@
 #ifndef DS1388_H
 #define DS1388_H
 
-#include <Energia.h>
-#include <DWire.h>
+#include <Wire.h>
+#include <RTClib.h>
 
 //Slave addresses
 #define I2C_ADDRESS 			0x68	//b1101000, for RTC and WD
@@ -52,34 +56,31 @@
 #define PM						0x20
 
 class DS1388
-
 {
 protected:
-	DWire &wire;
     unsigned char address;
 	
 public:
 	unsigned char date[8];
 
-	DS1388(DWire &i2c);
+	DS1388();
 	virtual ~DS1388( ) {};
 	
-	void init();
-	void init_time(unsigned char time_format, unsigned char *init_time);
-	unsigned char get_time();
-	unsigned char hex2dec(unsigned char val);
-	unsigned char dec2hex(unsigned char val);
-	unsigned char time_valid();
+	bool begin();
+	void adjust(const DateTime &dt);
+	DateTime now();
+	unsigned char oscillatorRunning();
 	void OSC_clear_flag();
 	unsigned char WD_status();
-	void WD_clear_flag();	
+	void WD_clear_flag();
+	uint8_t centisecond();
 	
 	// read and write from the register
 	unsigned char readRegister(unsigned char reg);
-	void writeRegister(unsigned char reg, unsigned char val);
+	bool writeRegister(unsigned char reg, unsigned char val);
 
 private:
-
+	uint8_t _centisecond;
 };
 
 #endif  // DS1388_H

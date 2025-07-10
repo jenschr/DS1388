@@ -20,7 +20,7 @@
  *   DWire &i2c             I2C object
  *
  */
-DS1388::DS1388(DWire &i2c): wire(i2c)
+DS1388::DS1388()
 {
     address = I2C_ADDRESS;
 }
@@ -30,108 +30,62 @@ DS1388::DS1388(DWire &i2c): wire(i2c)
  *   Control register is initialise to oscillator enable, watchdog counter disable, watchdog alarm disable
  *
  */
-void DS1388::init()
+bool DS1388::begin()
 {
-	writeRegister(CONTROL_REG, (EN_OSCILLATOR | DIS_WD_COUNTER));
+	Wire.beginTransmission(address);
+	if (Wire.endTransmission() == 0)
+		return true;
+	return writeRegister(CONTROL_REG, (EN_OSCILLATOR | DIS_WD_COUNTER));
 }
 
-/**  Initialise the time
- *   
- *   Parameters:
- *   unsigned char time_format			select either 12-HOUR FORMAT or 24-HOUR FORMAT, if 12-HOUR FORMAT, use together with AM, PM eg: HOUR_MODE_12 | PM 
- *   unsigned char init_time[0]			year
- *	 unsigned char init_time[1]			month
- *   unsigned char init_time[2]			date
- *   unsigned char init_time[3]			day of the week, MONDAY: 1, TUESDAY:2, ... SUNDAY: 7
- *   unsinged char init_time[4]			hour 
- *   unsigned char init_time[5] 		minutes 
- *   unsigned char init_time[6]			seconds
- *	 unsigned char init_time[7]			hundredth of second 
- *
- */
-void DS1388::init_time(unsigned char time_format, unsigned char *init_time)
-{
-	writeRegister(HUNDRED_SEC_REG, dec2hex(init_time[7]));
-	writeRegister(SEC_REG, dec2hex(init_time[6]));
-	writeRegister(MIN_REG, dec2hex(init_time[5]));
-	writeRegister(HOUR_REG, dec2hex(init_time[4]) | time_format);
-	writeRegister(DAY_REG, dec2hex(init_time[3]));
-	writeRegister(DATE_REG, dec2hex(init_time[2]));
-	writeRegister(MONTH_REG, dec2hex(init_time[1]));
-	writeRegister(YEAR_REG, dec2hex(init_time[0]));	
+static uint8_t bin2bcd(uint8_t val) {
+	return val + 6 * (val / 10);
 }
+static uint8_t bcd2bin(uint8_t val) {
+	return val - 6 * (val >> 4);
+}
+
+void DS1388::adjust(const DateTime &dt) {
+	Wire.beginTransmission(address);
+	Wire.write((uint8_t)0); // start at location 0
+	Wire.write((uint8_t)0);
+	Wire.write(bin2bcd(dt.second()));
+	Wire.write(bin2bcd(dt.minute()));
+	Wire.write(bin2bcd(dt.hour()));
+	Wire.write(bin2bcd(0));
+	Wire.write(bin2bcd(dt.day()));
+	Wire.write(bin2bcd(dt.month()));
+	Wire.write(bin2bcd(dt.year() - 2000U));
+	Wire.endTransmission();
+  }
 
 /**  Get time
  *
  *	 Returns:
- *   unsigned char			0: 12-hour mode, AM
- *							1: 12-hour mode, PM
- *							2: 24-hour mode
+ *   DateTime			A DateTime object based on RTC settings
  */
-unsigned char DS1388::get_time()
+DateTime DS1388::now()
 {
-	unsigned char ret;
-	
-	date[0] = readRegister(YEAR_REG);
-	date[1] = readRegister(MONTH_REG);
-	date[2] = readRegister(DATE_REG);
-	date[3] = readRegister(DAY_REG);
-	date[4] = readRegister(HOUR_REG);
-	date[5] = readRegister(MIN_REG);
-	date[6] = readRegister(SEC_REG);
-	date[7] = readRegister(HUNDRED_SEC_REG);
-	
-	//Time processing 
-	date[0] = hex2dec(date[0]);
-	date[1] = hex2dec(date[1]);
-	date[2] = hex2dec(date[2]);
-	date[5] = hex2dec(date[5]);
-	date[6] = hex2dec(date[6]);
-	date[7] = hex2dec(date[7]);
+	Wire.beginTransmission(address);
+	Wire.write((byte)0);
+	Wire.endTransmission();
 
-	
-	if ((date[4] & 0x40) == HOUR_MODE_24)
-	{
-		date[4] = hex2dec(date[4]);
-		ret = 2;
-		return ret;
-	}
-	else
-	{	
-		ret = (date[4] & 0x20 )>> 5;
-		date[4] = hex2dec(date[4] & 0x1F);
-		return ret;
-	}
+	Wire.requestFrom(address, 8);
+	_centisecond = bcd2bin(Wire.read()); // First byte is the hundredths of the second
+	uint8_t ss = bcd2bin(Wire.read() & 0x7F);
+	uint8_t mm = bcd2bin(Wire.read());
+	uint8_t hh = bcd2bin(Wire.read());
+	Wire.read();
+	uint8_t d = bcd2bin(Wire.read());
+	uint8_t m = bcd2bin(Wire.read());
+	uint16_t y = bcd2bin(Wire.read()) + 2000U;
+
+	return DateTime(y, m, d, hh, mm, ss);
 }
 
-/**  Convert the date from HEX to DEC
- *
- *   Parameters:
- *	 unsigned char val		value to be convert
- *
- *	 Returns:
- *	 unsigned char			converted value
- *
- */
-unsigned char DS1388::hex2dec(unsigned char val)
+uint8_t DS1388::centisecond()
 {
-	val = val - 6 * (val >> 4);
-	return val;
-}
-
-/**  Convert the date from DEC to HEX
- *
- *   Parameters:
- *	 unsigned char val		value to be convert
- *
- *	 Returns:
- *	 unsigned char			converted value
- *
- */
-unsigned char DS1388::dec2hex(unsigned char val)
-{
-	val = val + 6 * (val / 10);
-	return val;
+	return _centisecond;
 }
 
 /**  Check the validity of the time (oscillator funtionality)
@@ -140,7 +94,7 @@ unsigned char DS1388::dec2hex(unsigned char val)
  *	 unsigned char		1: time invalid, oscillator stopped
  *						0: time valid
  */
-unsigned char DS1388::time_valid()
+unsigned char DS1388::oscillatorRunning()
 {
 	unsigned char ret;
 	ret = readRegister(FLAG_REG);
@@ -184,10 +138,6 @@ void DS1388::WD_clear_flag()
 	writeRegister(FLAG_REG, (reg_save & 0x80));
 }
 
-
-
-
-
 /**  Returns the value (1 byte) of the selected internal register
  *
  *   Parameters:
@@ -200,14 +150,25 @@ void DS1388::WD_clear_flag()
 unsigned char DS1388::readRegister(unsigned char reg)
 {
     unsigned char ret = -1;
-    wire.beginTransmission(address);
-    wire.write(reg);
+    Wire.beginTransmission(address);
+    Wire.write(reg);
 
-    unsigned char res = wire.requestFrom(address, 1);
+    unsigned char res = Wire.requestFrom(address, 1);
     if (res == 1)
     {
-		ret = wire.read();
+		ret = Wire.read();
     }
+
+	int err = Wire.endTransmission();
+	if( err != 0 )
+	{
+		Serial.print(address);
+		Serial.print(" Error ");
+		Serial.print(err);
+		Serial.print(" reading from address ");
+		Serial.println(reg);
+	}
+	return err == 0;
 
     return ret;
 }
@@ -220,10 +181,19 @@ unsigned char DS1388::readRegister(unsigned char reg)
  *   unsigned char val     register value
  *
  */
-void DS1388::writeRegister(unsigned char reg, unsigned char val)
+bool DS1388::writeRegister(unsigned char reg, unsigned char val)
 {
-    wire.beginTransmission(address);
-    wire.write(reg);
-    wire.write(val & 0xFF);      
-    wire.endTransmission();
+    Wire.beginTransmission(address);
+    Wire.write(reg);
+    Wire.write(val & 0xFF);      
+    int err = Wire.endTransmission();
+	if( err != 0 )
+	{
+		Serial.print(address);
+		Serial.print(" Error writing ");
+		Serial.print(val);
+		Serial.print(" to address ");
+		Serial.println(reg);
+	}
+	return err == 0;
 }
